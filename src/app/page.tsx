@@ -3,13 +3,42 @@
 import { useRef, useState, useEffect } from "react";
 import Toolbar from "./Toolbar";
 
-export type Tool = "pen" | "rect" | "circle" | "line";
+export type Tool = "pen" | "rect" | "circle" | "line" | "select";
 
-type Shape =
-  | { type: "pen"; points: { x: number; y: number }[] }
-  | { type: "rect"; x: number; y: number; w: number; h: number }
-  | { type: "circle"; cx: number; cy: number; r: number }
-  | { type: "line"; x1: number; y1: number; x2: number; y2: number };
+// Consolidated shape types with ID
+type BaseShape = {
+  id: string;
+};
+
+type PenShape = BaseShape & {
+  type: "pen";
+  points: { x: number; y: number }[];
+};
+
+type RectShape = BaseShape & {
+  type: "rect";
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+};
+
+type CircleShape = BaseShape & {
+  type: "circle";
+  cx: number;
+  cy: number;
+  r: number;
+};
+
+type LineShape = BaseShape & {
+  type: "line";
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+};
+
+export type Shape = PenShape | RectShape | CircleShape | LineShape;
 
 const GRID_SIZE = 20; // px grid
 
@@ -17,19 +46,27 @@ function snap(n: number) {
   return Math.round(n / GRID_SIZE) * GRID_SIZE;
 }
 
+function generateId() {
+  return `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+}
+
 export default function Home() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [tool, setTool] = useState<Tool>("pen");
   const [isDrawing, setIsDrawing] = useState(false);
   const [isPanning, setIsPanning] = useState(false);
+  const [isDragging, setIsDragging] = useState(false);
   const [start, setStart] = useState({ x: 0, y: 0 });
   const [showGrid, setShowGrid] = useState(true);
   const [showAxes, setShowAxes] = useState(true);
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [shapes, setShapes] = useState<Shape[]>([]);
+  const [selectedShapeIds, setSelectedShapeIds] = useState<Set<string>>(new Set());
   const [currentPenPoints, setCurrentPenPoints] = useState<{ x: number; y: number }[]>([]);
   const [panStart, setPanStart] = useState({ x: 0, y: 0 });
+  const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
 
   /* ---------- canvas init + redraw ---------- */
   useEffect(() => {
@@ -48,7 +85,7 @@ export default function Home() {
     resize();
     window.addEventListener("resize", resize);
     return () => window.removeEventListener("resize", resize);
-  }, [showGrid, showAxes, zoom, pan, shapes]);
+  }, [showGrid, showAxes, zoom, pan, shapes, selectedShapeIds]);
 
   const redrawCanvas = (ctx: CanvasRenderingContext2D) => {
     ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -57,6 +94,7 @@ export default function Home() {
     drawGrid(ctx);
     drawAxes(ctx);
     redrawShapes(ctx);
+    drawSelection(ctx);
   };
 
   const drawGrid = (ctx: CanvasRenderingContext2D) => {
@@ -153,6 +191,91 @@ export default function Home() {
     ctx.restore();
   };
 
+  const drawSelection = (ctx: CanvasRenderingContext2D) => {
+    if (selectedShapeIds.size === 0) return;
+    
+    ctx.save();
+    ctx.strokeStyle = "#3b82f6";
+    ctx.lineWidth = 2 / zoom;
+    ctx.fillStyle = "rgba(59, 130, 246, 0.1)";
+    
+    for (const shape of shapes) {
+      if (!selectedShapeIds.has(shape.id)) continue;
+      
+      let bounds = getShapeBounds(shape);
+      if (!bounds) continue;
+      
+      // Draw selection box
+      ctx.strokeRect(bounds.x, bounds.y, bounds.w, bounds.h);
+      ctx.fillRect(bounds.x, bounds.y, bounds.w, bounds.h);
+      
+      // Draw resize handles
+      const handleSize = 8 / zoom;
+      ctx.fillStyle = "#3b82f6";
+      ctx.fillRect(bounds.x - handleSize/2, bounds.y - handleSize/2, handleSize, handleSize);
+      ctx.fillRect(bounds.x + bounds.w - handleSize/2, bounds.y - handleSize/2, handleSize, handleSize);
+      ctx.fillRect(bounds.x - handleSize/2, bounds.y + bounds.h - handleSize/2, handleSize, handleSize);
+      ctx.fillRect(bounds.x + bounds.w - handleSize/2, bounds.y + bounds.h - handleSize/2, handleSize, handleSize);
+    }
+    ctx.restore();
+  };
+
+  const getShapeBounds = (shape: Shape): { x: number, y: number, w: number, h: number } | null => {
+    switch (shape.type) {
+      case "pen":
+        if (shape.points.length === 0) return null;
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        for (const p of shape.points) {
+          minX = Math.min(minX, p.x);
+          minY = Math.min(minY, p.y);
+          maxX = Math.max(maxX, p.x);
+          maxY = Math.max(maxY, p.y);
+        }
+        return { x: minX, y: minY, w: maxX - minX, h: maxY - minY };
+      case "rect":
+        return { x: shape.x, y: shape.y, w: shape.w, h: shape.h };
+      case "circle":
+        return { x: shape.cx - shape.r, y: shape.cy - shape.r, w: shape.r * 2, h: shape.r * 2 };
+      case "line":
+        return { x: Math.min(shape.x1, shape.x2), y: Math.min(shape.y1, shape.y2), 
+                 w: Math.abs(shape.x2 - shape.x1), h: Math.abs(shape.y2 - shape.y1) };
+    }
+  };
+
+  const isPointInShape = (point: { x: number, y: number }, shape: Shape): boolean => {
+    const hitThreshold = 10 / zoom;
+    
+    switch (shape.type) {
+      case "pen":
+        for (let i = 0; i < shape.points.length - 1; i++) {
+          const p1 = shape.points[i];
+          const p2 = shape.points[i + 1];
+          if (distanceToSegment(point, p1, p2) < hitThreshold) return true;
+        }
+        return false;
+      case "rect":
+        return point.x >= shape.x && point.x <= shape.x + shape.w &&
+               point.y >= shape.y && point.y <= shape.y + shape.h;
+      case "circle":
+        const dist = Math.hypot(point.x - shape.cx, point.y - shape.cy);
+        return Math.abs(dist - shape.r) < hitThreshold || dist < shape.r;
+      case "line":
+        return distanceToSegment(point, { x: shape.x1, y: shape.y1 }, { x: shape.x2, y: shape.y2 }) < hitThreshold;
+    }
+  };
+
+  const distanceToSegment = (p: { x: number, y: number }, a: { x: number, y: number }, b: { x: number, y: number }): number => {
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    const length = Math.hypot(dx, dy);
+    if (length === 0) return Math.hypot(p.x - a.x, p.y - a.y);
+    
+    const t = Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / (length * length)));
+    const projX = a.x + t * dx;
+    const projY = a.y + t * dy;
+    return Math.hypot(p.x - projX, p.y - projY);
+  };
+
   /* ---------- helpers ---------- */
   const getCtx = () => canvasRef.current?.getContext("2d");
   
@@ -194,7 +317,6 @@ export default function Home() {
 
   /* ---------- mouse handlers ---------- */
   const startDraw = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    // Start panning with middle button or spacebar+left button
     if (e.button === 1 || (e.button === 0 && e.ctrlKey)) {
       e.preventDefault();
       setIsPanning(true);
@@ -203,8 +325,36 @@ export default function Home() {
       return;
     }
 
-    setIsDrawing(true);
     const p = pos(e);
+
+    if (tool === "select") {
+      const clickedShape = shapes.findLast(shape => isPointInShape(p, shape));
+      if (clickedShape) {
+        if (e.shiftKey) {
+          setSelectedShapeIds(prev => {
+            const newSet = new Set(prev);
+            if (newSet.has(clickedShape.id)) {
+              newSet.delete(clickedShape.id);
+            } else {
+              newSet.add(clickedShape.id);
+            }
+            return newSet;
+          });
+        } else {
+          setSelectedShapeIds(new Set([clickedShape.id]));
+          setIsDragging(true);
+          const bounds = getShapeBounds(clickedShape);
+          if (bounds) {
+            setDragOffset({ x: p.x - bounds.x, y: p.y - bounds.y });
+          }
+        }
+      } else {
+        setSelectedShapeIds(new Set());
+      }
+      return;
+    }
+
+    setIsDrawing(true);
     const s = { x: snap(p.x), y: snap(p.y) };
     setStart(s);
     
@@ -229,6 +379,17 @@ export default function Home() {
       return;
     }
 
+    if (isDragging && tool === "select") {
+      const p = pos(e);
+      const deltaX = p.x - dragOffset.x;
+      const deltaY = p.y - dragOffset.y;
+      
+      setShapes(prev => prev.map(shape => 
+        selectedShapeIds.has(shape.id) ? moveShapeBy(shape, deltaX, deltaY) : shape
+      ));
+      return;
+    }
+
     if (!isDrawing) return;
     const ctx = getCtx();
     if (!ctx) return;
@@ -238,14 +399,11 @@ export default function Home() {
     if (tool === "pen") {
       const newPoints = [...currentPenPoints, curr];
       setCurrentPenPoints(newPoints);
-      
-      // Draw the growing path
       ctx.lineTo(curr.x, curr.y);
       ctx.stroke();
       return;
     }
 
-    // Clear and redraw everything for shape preview
     const canvas = canvasRef.current!;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -280,33 +438,36 @@ export default function Home() {
       return;
     }
 
+    if (isDragging) {
+      setIsDragging(false);
+      return;
+    }
+
     if (!isDrawing) return;
     setIsDrawing(false);
     
     const ctx = getCtx();
     if (!ctx) return;
     
-    // Commit shape to history
     let newShape: Shape | null = null;
+    const id = generateId();
     
     if (tool === "pen" && currentPenPoints.length > 1) {
-      newShape = { type: "pen", points: currentPenPoints };
+      newShape = { id, type: "pen", points: currentPenPoints };
       setCurrentPenPoints([]);
-    } else if (tool !== "pen") {
-      const canvas = canvasRef.current!;
-      const rect = canvas.getBoundingClientRect();
+    } else if (tool !== "pen" && tool !== "select") {
       const p = pos(e);
       const curr = { x: snap(p.x), y: snap(p.y) };
       
       switch (tool) {
         case "rect":
-          newShape = { type: "rect", x: start.x, y: start.y, w: curr.x - start.x, h: curr.y - start.y };
+          newShape = { id, type: "rect", x: start.x, y: start.y, w: curr.x - start.x, h: curr.y - start.y };
           break;
         case "circle":
-          newShape = { type: "circle", cx: start.x, cy: start.y, r: Math.hypot(curr.x - start.x, curr.y - start.y) };
+          newShape = { id, type: "circle", cx: start.x, cy: start.y, r: Math.hypot(curr.x - start.x, curr.y - start.y) };
           break;
         case "line":
-          newShape = { type: "line", x1: start.x, y1: start.y, x2: curr.x, y2: curr.y };
+          newShape = { id, type: "line", x1: start.x, y1: start.y, x2: curr.x, y2: curr.y };
           break;
       }
     }
@@ -318,12 +479,184 @@ export default function Home() {
     ctx.closePath();
   };
 
+  const moveShapeBy = (shape: Shape, deltaX: number, deltaY: number): Shape => {
+    switch (shape.type) {
+      case "pen":
+        return { ...shape, points: shape.points.map(p => ({ x: p.x + deltaX, y: p.y + deltaY })) };
+      case "rect":
+        return { ...shape, x: shape.x + deltaX, y: shape.y + deltaY };
+      case "circle":
+        return { ...shape, cx: shape.cx + deltaX, cy: shape.cy + deltaY };
+      case "line":
+        return { ...shape, x1: shape.x1 + deltaX, y1: shape.y1 + deltaY, x2: shape.x2 + deltaX, y2: shape.y2 + deltaY };
+    }
+  };
+
+  /* ---------- svg import ---------- */
+  const handleImportSVG = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    
+    const text = await file.text();
+    const parser = new DOMParser();
+    const svgDoc = parser.parseFromString(text, "image/svg+xml");
+    const svgElements = svgDoc.querySelectorAll("rect, circle, ellipse, line, polyline, polygon, path");
+    
+    const importedShapes: Shape[] = [];
+    
+    svgElements.forEach((el) => {
+      const shape = parseSVGElement(el);
+      if (shape) importedShapes.push(shape);
+    });
+    
+    if (importedShapes.length > 0) {
+      setShapes(prev => [...prev, ...importedShapes]);
+    }
+    
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  };
+
+  const parseSVGElement = (el: Element): Shape | null => {
+    const id = generateId();
+    
+    try {
+      switch (el.tagName.toLowerCase()) {
+        case "rect":
+          const rect = el as SVGRectElement;
+          return {
+            id,
+            type: "rect",
+            x: parseFloat(rect.getAttribute("x") || "0"),
+            y: parseFloat(rect.getAttribute("y") || "0"),
+            w: parseFloat(rect.getAttribute("width") || "0"),
+            h: parseFloat(rect.getAttribute("height") || "0")
+          };
+        case "circle":
+          const circle = el as SVGCircleElement;
+          return {
+            id,
+            type: "circle",
+            cx: parseFloat(circle.getAttribute("cx") || "0"),
+            cy: parseFloat(circle.getAttribute("cy") || "0"),
+            r: parseFloat(circle.getAttribute("r") || "0")
+          };
+        case "ellipse":
+          const ellipse = el as SVGEllipseElement;
+          const rx = parseFloat(ellipse.getAttribute("rx") || "0");
+          const ry = parseFloat(ellipse.getAttribute("ry") || "0");
+          return {
+            id,
+            type: "circle",
+            cx: parseFloat(ellipse.getAttribute("cx") || "0"),
+            cy: parseFloat(ellipse.getAttribute("cy") || "0"),
+            r: (rx + ry) / 2
+          };
+        case "line":
+          const line = el as SVGLineElement;
+          return {
+            id,
+            type: "line",
+            x1: parseFloat(line.getAttribute("x1") || "0"),
+            y1: parseFloat(line.getAttribute("y1") || "0"),
+            x2: parseFloat(line.getAttribute("x2") || "0"),
+            y2: parseFloat(line.getAttribute("y2") || "0")
+          };
+        case "polyline":
+        case "polygon":
+          const poly = el as SVGPolylineElement;
+          const pointsAttr = poly.getAttribute("points");
+          if (!pointsAttr) return null;
+          const points = parsePoints(pointsAttr);
+          if (points.length < 2) return null;
+          return { id, type: "pen", points };
+        case "path":
+          const path = el as SVGPathElement;
+          const d = path.getAttribute("d");
+          if (!d) return null;
+          const pathPoints = parsePath(d);
+          if (pathPoints.length < 2) return null;
+          return { id, type: "pen", points: pathPoints };
+        default:
+          return null;
+      }
+    } catch (err) {
+      console.warn("Failed to parse SVG element:", el, err);
+      return null;
+    }
+  };
+
+  const parsePoints = (pointsAttr: string): { x: number, y: number }[] => {
+    const points = [];
+    const tokens = pointsAttr.trim().split(/[\s,]+/);
+    for (let i = 0; i < tokens.length; i += 2) {
+      if (i + 1 < tokens.length) {
+        points.push({ x: parseFloat(tokens[i]), y: parseFloat(tokens[i + 1]) });
+      }
+    }
+    return points;
+  };
+
+  const parsePath = (d: string): { x: number, y: number }[] => {
+    const points = [];
+    const commands = d.match(/[MmLlHhVvCcSsQqTtAaZz]/g) || [];
+    const values = d.split(/[MmLlHhVvCcSsQqTtAaZz]/).filter(s => s.trim());
+    
+    let current = { x: 0, y: 0 };
+    let i = 0;
+    
+    for (const cmd of commands) {
+      const nums = (values[i] || "").trim().split(/[\s,]+/).filter(s => s).map(parseFloat);
+      i++;
+      
+      switch (cmd) {
+        case 'M':
+        case 'm':
+          if (nums.length >= 2) {
+            current = cmd === 'm' ? { x: current.x + nums[0], y: current.y + nums[1] } : { x: nums[0], y: nums[1] };
+            points.push(current);
+          }
+          break;
+        case 'L':
+        case 'l':
+          if (nums.length >= 2) {
+            current = cmd === 'l' ? { x: current.x + nums[0], y: current.y + nums[1] } : { x: nums[0], y: nums[1] };
+            points.push(current);
+          }
+          break;
+      }
+    }
+    return points;
+  };
+
+  /* ---------- keyboard delete ---------- */
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Delete" && selectedShapeIds.size > 0) {
+        setShapes(prev => prev.filter(s => !selectedShapeIds.has(s.id)));
+        setSelectedShapeIds(new Set());
+      }
+    };
+    
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [selectedShapeIds]);
+
   /* ---------- render ---------- */
   return (
     <main className="flex h-screen bg-gray-100">
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept=".svg"
+        onChange={handleImportSVG}
+        className="hidden"
+      />
       <Toolbar
         selected={tool}
-        onSelect={setTool}
+        onSelect={(t) => {
+          setTool(t);
+          if (t !== "select") setSelectedShapeIds(new Set());
+        }}
         showGrid={showGrid}
         toggleGrid={() => setShowGrid(g => !g)}
         showAxes={showAxes}
@@ -332,6 +665,12 @@ export default function Home() {
         onZoomIn={handleZoomIn}
         onZoomOut={handleZoomOut}
         onZoomReset={handleZoomReset}
+        onImportSVG={() => fileInputRef.current?.click()}
+        hasSelection={selectedShapeIds.size > 0}
+        onDelete={() => {
+          setShapes(prev => prev.filter(s => !selectedShapeIds.has(s.id)));
+          setSelectedShapeIds(new Set());
+        }}
       />
       <div className="flex-1 relative overflow-hidden">
         <canvas

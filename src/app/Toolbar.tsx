@@ -7,6 +7,7 @@ const tools: { key: Tool; label: string; icon: string }[] = [
   { key: "rect", label: "Rectangle", icon: "⬜" },
   { key: "circle", label: "Circle", icon: "⭕" },
   { key: "line", label: "Line", icon: "📏" },
+  { key: "select", label: "Select", icon: "👆" },
 ];
 
 export default function Toolbar({
@@ -20,6 +21,9 @@ export default function Toolbar({
   onZoomIn,
   onZoomOut,
   onZoomReset,
+  onImportSVG,
+  hasSelection,
+  onDelete,
 }: {
   selected: Tool;
   onSelect: (t: Tool) => void;
@@ -31,6 +35,9 @@ export default function Toolbar({
   onZoomIn: () => void;
   onZoomOut: () => void;
   onZoomReset: () => void;
+  onImportSVG: () => void;
+  hasSelection: boolean;
+  onDelete: () => void;
 }) {
   return (
     <aside className="w-20 bg-gray-800 text-white flex flex-col items-center py-4 space-y-4">
@@ -39,7 +46,7 @@ export default function Toolbar({
           key={t.key}
           onClick={() => onSelect(t.key)}
           title={t.label}
-          className={`w-14 h-14 rounded-lg flex items-center justify-center text-2xl transition ${
+          className={`w-14 h-14 rounded-lg flex items-center justify-center text-xl transition ${
             selected === t.key
               ? "bg-blue-600 shadow-lg"
               : "bg-gray-700 hover:bg-gray-600"
@@ -49,16 +56,27 @@ export default function Toolbar({
         </button>
       ))}
 
+      {/* Import SVG */}
+      <button
+        onClick={onImportSVG}
+        title="Import SVG"
+        className="w-14 h-14 rounded-lg flex items-center justify-center text-xl bg-gray-700 hover:bg-gray-600 transition"
+      >
+        📄
+      </button>
+
+      {/* Grid toggle */}
       <button
         onClick={toggleGrid}
         title="Toggle grid"
-        className={`w-14 h-14 rounded-lg flex items-center justify-center text-2xl transition mt-auto ${
+        className={`w-14 h-14 rounded-lg flex items-center justify-center text-2xl transition ${
           showGrid ? "bg-green-600" : "bg-gray-700 hover:bg-gray-600"
         }`}
       >
         #
       </button>
 
+      {/* Axes toggle */}
       <button
         onClick={toggleAxes}
         title="Toggle axes"
@@ -69,6 +87,7 @@ export default function Toolbar({
         ⟁
       </button>
 
+      {/* Zoom controls */}
       <div className="flex flex-col items-center space-y-2 mt-2">
         <button
           onClick={onZoomIn}
@@ -95,6 +114,17 @@ export default function Toolbar({
           Reset
         </button>
       </div>
+
+      {/* Delete button (shows when shapes selected) */}
+      {hasSelection && (
+        <button
+          onClick={onDelete}
+          title="Delete Selected (Delete)"
+          className="w-14 h-14 rounded-lg flex items-center justify-center text-xl bg-red-700 hover:bg-red-600 transition"
+        >
+          🗑️
+        </button>
+      )}
     </aside>
   );
 }
