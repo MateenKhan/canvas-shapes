@@ -49,7 +49,6 @@ export default function Toolbar({
         </button>
       ))}
 
-      {/* Grid toggle */}
       <button
         onClick={toggleGrid}
         title="Toggle grid"
@@ -60,7 +59,6 @@ export default function Toolbar({
         #
       </button>
 
-      {/* Axes toggle */}
       <button
         onClick={toggleAxes}
         title="Toggle axes"
@@ -71,7 +69,6 @@ export default function Toolbar({
         ⟁
       </button>
 
-      {/* Zoom controls */}
       <div className="flex flex-col items-center space-y-2 mt-2">
         <button
           onClick={onZoomIn}
